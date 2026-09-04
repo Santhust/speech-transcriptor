@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from core.audio_capture import AudioCapture
 from core.engine_vosk import VoskEngine
 from core.engine_whisper import WhisperEngine
+from core.level_monitor import LevelMonitor
 from core.output_manager import OutputManager
 from core.summarizer import Summarizer
 from gui.audio_meter import AudioMeter
@@ -48,6 +49,8 @@ class MainWindow(QMainWindow):
         self._is_streaming_mode = True
         self._batch_engine = "whisper"
         self._start_time = 0.0
+        self._system_monitor = None
+        self._mic_monitor = None
         self._vosk_loaded = False
         self._whisper_loaded = False
         self._summarizer_loaded = False
@@ -62,6 +65,8 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._apply_keywords_from_config()
         self._update_model_status()
+        self.action_meter_system.setChecked(_cfg.get_bool("view/meter_system"))
+        self.action_meter_mic.setChecked(_cfg.get_bool("view/meter_mic"))
 
         self._vosk.load_model()
         self._whisper.load_model()
@@ -101,9 +106,18 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        self._audio_meter = AudioMeter()
-        self._audio_meter.setVisible(False)
-        layout.addWidget(self._audio_meter)
+        self._meters_panel = QWidget()
+        meters_layout = QVBoxLayout(self._meters_panel)
+        meters_layout.setContentsMargins(0, 0, 0, 0)
+        meters_layout.setSpacing(2)
+
+        self._system_meter_row = self._make_meter_row("\U0001f50a System")
+        self._mic_meter_row = self._make_meter_row("\U0001f3a4 Mic")
+        meters_layout.addLayout(self._system_meter_row[0])
+        meters_layout.addLayout(self._mic_meter_row[0])
+
+        self._meters_panel.setVisible(False)
+        layout.addWidget(self._meters_panel)
 
         self._search_bar = SearchBar()
         self._search_bar.search_changed.connect(self._on_search)
@@ -157,6 +171,17 @@ class MainWindow(QMainWindow):
 
         self._partial_label.setVisible(True)
         self._partial_header.setVisible(True)
+
+    def _make_meter_row(self, label_text: str):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        label = QLabel(label_text)
+        label.setFixedWidth(64)
+        meter = AudioMeter()
+        meter.setVisible(False)
+        row.addWidget(label)
+        row.addWidget(meter)
+        return row, meter
 
     @staticmethod
     def _make_icon(char: str, size: int = 24) -> QIcon:
@@ -252,6 +277,65 @@ class MainWindow(QMainWindow):
             if dev.pulse_source_name == saved_name:
                 return dev
         return self._audio.get_default_monitor()
+
+    def _meter_source(self, kind: str):
+        if kind == "system":
+            dev = self._audio.get_default_monitor()
+            return dev.pulse_source_name if dev else None
+        for dev in self._audio.get_all_devices():
+            if not dev.is_monitor:
+                return dev.pulse_source_name
+        return None
+
+    def _ensure_meter_monitor(self, kind: str):
+        attr = f"_{kind}_monitor"
+        monitor = getattr(self, attr)
+        if monitor is not None:
+            return monitor
+        source = self._meter_source(kind)
+        if source is None:
+            return None
+        meter = self._system_meter_row[1] if kind == "system" else self._mic_meter_row[1]
+        monitor = LevelMonitor(source, lambda lvl: meter.set_level(lvl))
+        setattr(self, attr, monitor)
+        return monitor
+
+    def _set_system_meter_visible(self, visible: bool):
+        self._apply_meter_visibility("system", visible)
+
+    def _set_mic_meter_visible(self, visible: bool):
+        self._apply_meter_visibility("mic", visible)
+
+    def _apply_meter_visibility(self, kind: str, visible: bool):
+        cfg = get_config()
+        cfg.set(f"view/meter_{kind}", bool(visible))
+        row = self._system_meter_row if kind == "system" else self._mic_meter_row
+        row[1].setVisible(visible)
+        self._meters_panel.setVisible(
+            self._system_meter_row[1].isVisibleTo(self._meters_panel)
+            or self._mic_meter_row[1].isVisibleTo(self._meters_panel)
+        )
+
+        monitor = (
+            self._ensure_meter_monitor(kind) if visible else getattr(self, f"_{kind}_monitor")
+        )
+        if monitor is not None:
+            if visible:
+                monitor.start()
+                row[1].set_level(0.0)
+            else:
+                monitor.stop()
+
+    def _toggle_all_meters(self):
+        any_on = self.action_meter_system.isChecked() or self.action_meter_mic.isChecked()
+        self.action_meter_system.setChecked(not any_on)
+        self.action_meter_mic.setChecked(not any_on)
+
+    def _shutdown_meter_monitors(self):
+        for kind in ("system", "mic"):
+            monitor = getattr(self, f"_{kind}_monitor", None)
+            if monitor is not None:
+                monitor.stop()
 
     def _setup_menus(self):
         menubar = self.menuBar()
@@ -359,11 +443,22 @@ class MainWindow(QMainWindow):
 
         view_menu.addSeparator()
 
-        self.action_meter = QAction("Show Audio &Meter", self)
+        meters_menu = view_menu.addMenu("Audio &Meters")
+
+        self.action_meter_system = QAction("Show \U0001f50a System Meter", self)
+        self.action_meter_system.setCheckable(True)
+        self.action_meter_system.toggled.connect(self._set_system_meter_visible)
+        meters_menu.addAction(self.action_meter_system)
+
+        self.action_meter_mic = QAction("Show \U0001f3a4 Microphone Meter", self)
+        self.action_meter_mic.setCheckable(True)
+        self.action_meter_mic.toggled.connect(self._set_mic_meter_visible)
+        meters_menu.addAction(self.action_meter_mic)
+
+        self.action_meter = QAction("Toggle All &Meters", self)
         self.action_meter.setShortcut(QKeySequence("Ctrl+M"))
-        self.action_meter.setCheckable(True)
-        self.action_meter.toggled.connect(self._audio_meter.setVisible)
-        view_menu.addAction(self.action_meter)
+        self.action_meter.triggered.connect(self._toggle_all_meters)
+        meters_menu.addAction(self.action_meter)
 
         self.action_autoscroll = QAction("&Auto-scroll", self)
         self.action_autoscroll.setShortcut(QKeySequence("Ctrl+J"))
@@ -478,7 +573,6 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self._audio.set_audio_callback(self._on_audio_data)
-        self._audio.set_level_callback(self._on_audio_level)
 
         self._connect_engine_signals()
 
@@ -545,9 +639,6 @@ class MainWindow(QMainWindow):
                 self._vosk.feed_audio_buffered(audio_data, sample_rate)
             else:
                 self._whisper.feed_audio(audio_data, sample_rate)
-
-    def _on_audio_level(self, level: float):
-        self._audio_meter.set_level(level)
 
     @Slot(str)
     def _on_partial(self, text: str):
@@ -890,6 +981,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._audio.stop()
+        self._shutdown_meter_monitors()
         self._vosk.cleanup()
         self._whisper.cleanup()
         self._summarizer.cleanup()

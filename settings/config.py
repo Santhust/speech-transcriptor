@@ -31,6 +31,8 @@ _DEFAULTS = {
     "view/auto_scroll": True,
     "view/show_timestamps": True,
     "view/show_meter": False,
+    "view/meter_system": False,
+    "view/meter_mic": False,
 }
 
 

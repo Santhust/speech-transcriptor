@@ -12,7 +12,7 @@ A Python desktop application that captures system audio on Linux and transcribes
 - **LLM summarization** — generate summaries of transcripts using local Qwen2.5 models (1.5B or 3B) via llama-cpp-python
 - **Export** — save transcripts as .txt or .srt (subtitle) files
 - **Search & highlight** — Ctrl+F search with keyword highlighting
-- **Audio meter** — visual level meter during recording
+- **Audio meters** — simultaneous level meters for system audio and microphone (View > Audio Meters)
 - **Diagnostics** — built-in device and engine test dialogs
 
 ## Requirements
