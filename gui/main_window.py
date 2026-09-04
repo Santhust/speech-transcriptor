@@ -1,7 +1,16 @@
 import time
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPalette,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -222,6 +231,16 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QApplication.palette().color(QPalette.ColorRole.WindowText)
+        if not color.isValid() or color.lightnessF() > 0.9:
+            base = QApplication.palette().color(QPalette.ColorRole.Base)
+            color = (
+                QColor(Qt.white)
+                if base.lightnessF() < 0.5
+                else QColor(Qt.black)
+            )
+        painter.setPen(color)
         painter.setFont(QFont("sans-serif", int(size * 0.65)))
         painter.drawText(pixmap.rect(), Qt.AlignCenter, char)
         painter.end()
@@ -273,6 +292,9 @@ class MainWindow(QMainWindow):
 
         self.action_find.setIcon(self._make_icon("🔍"))
         self._toolbar.addAction(self.action_find)
+
+        self.action_clear.setIcon(self._make_icon("\U0001f9f9"))
+        self._toolbar.addAction(self.action_clear)
 
     def _refresh_device_combo(self):
         cfg = get_config()
@@ -450,8 +472,10 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.action_copy)
 
         action_clear = QAction("&Clear Display", self)
+        action_clear.setIcon(self._make_icon("\U0001f9f9"))
         action_clear.setShortcut(QKeySequence("Ctrl+L"))
         action_clear.triggered.connect(self._clear_display)
+        self.action_clear = action_clear
         edit_menu.addAction(action_clear)
 
         edit_menu.addSeparator()
@@ -516,6 +540,9 @@ class MainWindow(QMainWindow):
         self.action_meter.setShortcut(QKeySequence("Ctrl+M"))
         self.action_meter.triggered.connect(self._toggle_all_meters)
         meters_menu.addAction(self.action_meter)
+
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_clear)
 
         self.action_autoscroll = QAction("&Auto-scroll", self)
         self.action_autoscroll.setShortcut(QKeySequence("Ctrl+J"))

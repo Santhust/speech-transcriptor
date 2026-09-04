@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from core.summarizer import Summarizer
 from settings.config import LANGUAGE_MODELS, get_config
+from settings.theme import THEME_OPTIONS
 
 
 class SettingsDialog(QDialog):
@@ -101,8 +102,16 @@ class SettingsDialog(QDialog):
         self._keywords_input = QLineEdit()
         self._keywords_input.setPlaceholderText("comma-separated keywords to highlight")
 
+        self._theme_combo = QComboBox()
+        for key, display in THEME_OPTIONS.items():
+            self._theme_combo.addItem(display, key)
+        self._theme_combo.setToolTip(
+            "Applied on next start. Dark mode keeps toolbar icons visible."
+        )
+
         appear_form.addRow("Font size:", self._font_size_input)
         appear_form.addRow("Highlight keywords:", self._keywords_input)
+        appear_form.addRow("Theme:", self._theme_combo)
         appearance_group.setLayout(appear_form)
         layout.addWidget(appearance_group)
 
@@ -134,6 +143,9 @@ class SettingsDialog(QDialog):
         self._auto_save_input.setText(self._cfg.get_str("output/format"))
         self._font_size_input.setValue(self._cfg.get_int("appearance/font_size"))
         self._keywords_input.setText(self._cfg.get_str("appearance/keywords"))
+        theme_idx = self._theme_combo.findData(self._cfg.get_str("appearance/theme"))
+        if theme_idx >= 0:
+            self._theme_combo.setCurrentIndex(theme_idx)
 
     def _browse_output_dir(self):
         from PySide6.QtWidgets import QFileDialog
@@ -156,4 +168,5 @@ class SettingsDialog(QDialog):
         self._cfg.set("output/format", self._auto_save_input.text() or "txt")
         self._cfg.set("appearance/font_size", self._font_size_input.value())
         self._cfg.set("appearance/keywords", self._keywords_input.text())
+        self._cfg.set("appearance/theme", self._theme_combo.currentData())
         self.accept()
