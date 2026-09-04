@@ -106,7 +106,7 @@ class SettingsDialog(QDialog):
         for key, display in THEME_OPTIONS.items():
             self._theme_combo.addItem(display, key)
         self._theme_combo.setToolTip(
-            "Applied on next start. Dark mode keeps toolbar icons visible."
+            "Applied immediately. Dark mode keeps toolbar icons and meters visible."
         )
 
         appear_form.addRow("Font size:", self._font_size_input)

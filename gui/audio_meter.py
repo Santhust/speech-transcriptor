@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QPainter
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
 
@@ -25,7 +25,10 @@ class AudioMeter(QWidget):
         w = self.width()
         h = self.height()
 
-        painter.fillRect(0, 0, w, h, QColor(40, 40, 40))
+        base = self.palette().color(self.backgroundRole())
+        if not base.isValid():
+            base = QColor(40, 40, 40)
+        painter.fillRect(0, 0, w, h, base)
 
         fill_w = int(w * self._level)
 
@@ -38,6 +41,10 @@ class AudioMeter(QWidget):
 
         painter.fillRect(0, 0, fill_w, h, color)
 
-        painter.setPen(QColor(80, 80, 80))
+        border = self.palette().color(self.foregroundRole())
+        if not border.isValid():
+            border = QColor(128, 128, 128)
+        border.setAlpha(160)
+        painter.setPen(border)
         painter.drawRect(0, 0, w - 1, h - 1)
         painter.end()

@@ -74,7 +74,7 @@ Edit preferences via Edit > Preferences (Ctrl+,):
 - LLM model selection (3B or 1.5B)
 - Output directory and default format
 - Font size and highlight keywords
-- Theme (System, Light, or Dark — applied on next start)
+- Theme (System, Light, or Dark — applied immediately)
 
 ## License
 

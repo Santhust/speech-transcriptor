@@ -9,6 +9,8 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPalette,
+    QPainterPath,
+    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         self._audio = AudioCapture()
         _cfg = get_config()
         self._language = _cfg.get_str("recognition/language")
+        self._applied_theme = _cfg.get_str("appearance/theme")
         self._create_stt_engines()
         self._output = OutputManager()
 
@@ -154,8 +157,8 @@ class MainWindow(QMainWindow):
         meters_layout.setContentsMargins(0, 0, 0, 0)
         meters_layout.setSpacing(2)
 
-        self._system_meter_row = self._make_meter_row("\U0001f50a System")
-        self._mic_meter_row = self._make_meter_row("\U0001f3a4 Mic")
+        self._system_meter_row = self._make_meter_row("speaker", "System")
+        self._mic_meter_row = self._make_meter_row("mic", "Mic")
         meters_layout.addLayout(self._system_meter_row[0])
         meters_layout.addLayout(self._mic_meter_row[0])
 
@@ -215,23 +218,23 @@ class MainWindow(QMainWindow):
         self._partial_label.setVisible(True)
         self._partial_header.setVisible(True)
 
-    def _make_meter_row(self, label_text: str):
+    def _make_meter_row(self, kind: str, label_text: str):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
+        icon_label = QLabel()
+        icon_label.setPixmap(self._make_device_icon(kind, size=18).pixmap(18, 18))
+        icon_label.setFixedWidth(20)
         label = QLabel(label_text)
         label.setFixedWidth(64)
         meter = AudioMeter()
         meter.setVisible(False)
+        row.addWidget(icon_label)
         row.addWidget(label)
         row.addWidget(meter)
-        return row, meter
+        return row, meter, icon_label, kind
 
     @staticmethod
-    def _make_icon(char: str, size: int = 24) -> QIcon:
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    def _icon_pen_color() -> QColor:
         color = QApplication.palette().color(QPalette.ColorRole.WindowText)
         if not color.isValid() or color.lightnessF() > 0.9:
             base = QApplication.palette().color(QPalette.ColorRole.Base)
@@ -240,9 +243,75 @@ class MainWindow(QMainWindow):
                 if base.lightnessF() < 0.5
                 else QColor(Qt.black)
             )
-        painter.setPen(color)
+        return color
+
+    @staticmethod
+    def _make_icon(char: str, size: int = 24) -> QIcon:
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(MainWindow._icon_pen_color())
         painter.setFont(QFont("sans-serif", int(size * 0.65)))
         painter.drawText(pixmap.rect(), Qt.AlignCenter, char)
+        painter.end()
+        return QIcon(pixmap)
+
+    @staticmethod
+    def _make_device_icon(kind: str, size: int = 24) -> QIcon:
+        from PySide6.QtCore import QPointF, QRectF
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        s = size / 24.0
+        color = MainWindow._icon_pen_color()
+
+        def paint_speaker(p: QPainter):
+            p.setPen(Qt.NoPen)
+            p.setBrush(color)
+            p.drawRect(QRectF(2 * s, 9 * s, 4 * s, 6 * s))
+            p.drawPolygon(
+                [
+                    QPointF(6 * s, 9 * s),
+                    QPointF(13 * s, 3 * s),
+                    QPointF(13 * s, 21 * s),
+                    QPointF(6 * s, 15 * s),
+                ]
+            )
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(color, 1.8 * s))
+            p.drawArc(QRectF(14 * s, 7 * s, 7 * s, 10 * s), -55 * 16, 110 * 16)
+            p.drawArc(QRectF(17 * s, 4 * s, 13 * s, 16 * s), -55 * 16, 110 * 16)
+
+        def paint_mic(p: QPainter):
+            p.setPen(Qt.NoPen)
+            p.setBrush(color)
+            p.drawRoundedRect(QRectF(9 * s, 2 * s, 6 * s, 11 * s), 3 * s, 3 * s)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(color, 1.8 * s))
+            p.drawArc(QRectF(5 * s, 6 * s, 14 * s, 13 * s), 180 * 16, -180 * 16)
+            line_path = QPainterPath()
+            line_path.moveTo(12 * s, 19 * s)
+            line_path.lineTo(12 * s, 22 * s)
+            p.drawPath(line_path)
+
+        if kind == "speaker":
+            paint_speaker(painter)
+        elif kind == "mic":
+            paint_mic(painter)
+        elif kind == "mix":
+            painter.save()
+            painter.scale(0.62, 0.62)
+            paint_speaker(painter)
+            painter.restore()
+            painter.save()
+            painter.translate(11 * s, 3 * s)
+            painter.scale(0.62, 0.62)
+            paint_mic(painter)
+            painter.restore()
+
         painter.end()
         return QIcon(pixmap)
 
@@ -258,43 +327,38 @@ class MainWindow(QMainWindow):
         self._refresh_device_combo()
         self._toolbar.addWidget(self._device_combo)
 
+        self._apply_action_icons()
+
         self._toolbar.addSeparator()
-
-        self.action_start.setIcon(self._make_icon("▶"))
         self._toolbar.addAction(self.action_start)
-
-        self.action_pause.setIcon(self._make_icon("⏸"))
         self._toolbar.addAction(self.action_pause)
-
-        self.action_stop.setIcon(self._make_icon("⏹"))
         self._toolbar.addAction(self.action_stop)
 
         self._toolbar.addSeparator()
-
-        self.action_streaming.setIcon(self._make_icon("📡"))
         self._toolbar.addAction(self.action_streaming)
-
-        self.action_batch.setIcon(self._make_icon("📄"))
         self._toolbar.addAction(self.action_batch)
 
         self._toolbar.addSeparator()
-
-        self.action_export.setIcon(self._make_icon("💾"))
         self._toolbar.addAction(self.action_export)
-
-        self.action_copy.setIcon(self._make_icon("📋"))
         self._toolbar.addAction(self.action_copy)
 
         self._toolbar.addSeparator()
-
-        self.action_summarize.setIcon(self._make_icon("💡"))
         self._toolbar.addAction(self.action_summarize)
-
-        self.action_find.setIcon(self._make_icon("🔍"))
         self._toolbar.addAction(self.action_find)
-
-        self.action_clear.setIcon(self._make_icon("\U0001f9f9"))
         self._toolbar.addAction(self.action_clear)
+
+    def _apply_action_icons(self):
+        self.action_start.setIcon(self._make_icon("▶"))
+        self.action_pause.setIcon(self._make_icon("⏸"))
+        self.action_stop.setIcon(self._make_icon("⏹"))
+        self.action_streaming.setIcon(self._make_icon("📡"))
+        self.action_batch.setIcon(self._make_icon("📄"))
+        self.action_export.setIcon(self._make_icon("💾"))
+        self.action_copy.setIcon(self._make_icon("📋"))
+        self.action_summarize.setIcon(self._make_icon("💡"))
+        self.action_find.setIcon(self._make_icon("🔍"))
+        self.action_clear.setIcon(self._make_icon("\U0001f9f9"))
+        self._refresh_device_combo_icons()
 
     def _refresh_device_combo(self):
         cfg = get_config()
@@ -304,14 +368,14 @@ class MainWindow(QMainWindow):
         self._device_combo.blockSignals(True)
         self._device_combo.clear()
         self._device_combo.addItem(
-            "\U0001f3a4+\U0001f50a Mic + System (separate speakers)", "__dual_sep__"
+            "Mic + System (separate speakers)", "__dual_sep__"
         )
         self._device_combo.addItem(
-            "\U0001f3a4+\U0001f50a Mic + System (merged)", "__dual_mix__"
+            "Mic + System (merged)", "__dual_mix__"
         )
+        self._refresh_device_combo_icons()
         for dev in devices:
-            icon = "\U0001f50a" if dev.is_monitor else "\U0001f3a4"
-            self._device_combo.addItem(f"{icon} {dev.display_name}", dev.pulse_source_name)
+            self._device_combo.addItem(dev.display_name, dev.pulse_source_name)
 
         idx = self._device_combo.findData(saved_name)
         if idx < 0 and saved_name not in ("__dual_sep__", "__dual_mix__"):
@@ -326,6 +390,19 @@ class MainWindow(QMainWindow):
         self._device_combo.setCurrentIndex(idx)
         cfg.set("audio/device_name", str(self._device_combo.itemData(idx)))
         self._device_combo.blockSignals(False)
+
+    def _refresh_device_combo_icons(self):
+        combo = getattr(self, "_device_combo", None)
+        if combo is None or combo.count() == 0:
+            return
+        combo.setItemIcon(0, self._make_device_icon("mic"))
+        combo.setItemIcon(1, self._make_device_icon("mix"))
+        for i in range(2, combo.count()):
+            source = combo.itemData(i)
+            kind = (
+                "speaker" if (source and str(source).endswith(".monitor")) else "mic"
+            )
+            combo.setItemIcon(i, self._make_device_icon(kind))
 
     def _on_device_selected(self, index: int):
         if index < 0:
@@ -1049,6 +1126,19 @@ class MainWindow(QMainWindow):
             if new_lang != self._language:
                 self._language = new_lang
                 self._rebuild_stt_engines()
+
+            new_theme = cfg.get_str("appearance/theme")
+            if new_theme != self._applied_theme:
+                self._switch_theme(new_theme)
+
+    def _switch_theme(self, theme: str):
+        from settings.theme import apply_theme
+
+        apply_theme(theme)
+        self._applied_theme = theme
+        self._apply_action_icons()
+        for row in (self._system_meter_row, self._mic_meter_row):
+            row[2].setPixmap(self._make_device_icon(row[3], size=18).pixmap(18, 18))
 
     def _on_find(self):
         self._search_bar.toggle()
