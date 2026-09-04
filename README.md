@@ -7,6 +7,7 @@ A Python desktop application that captures system audio on Linux and transcribes
 - **System audio capture** — records any audio playing on your computer (browser tabs, music, meetings) via PipeWire/PulseAudio monitor sources
 - **Streaming transcription** — real-time partial and final transcription using Vosk
 - **Batch transcription** — record first, transcribe after using either Vosk or faster-whisper
+- **Multi-language** — English and German recognition, plus Whisper auto-detect in batch mode
 - **LLM summarization** — generate summaries of transcripts using local Qwen2.5 models (1.5B or 3B) via llama-cpp-python
 - **Export** — save transcripts as .txt or .srt (subtitle) files
 - **Search & highlight** — Ctrl+F search with keyword highlighting
@@ -32,8 +33,8 @@ python main.py
 ```
 
 Models are downloaded automatically on first use:
-- **Vosk** small-en-us (~40MB) — for streaming and batch transcription
-- **faster-whisper** tiny int8 (~40MB) — alternative batch transcription engine
+- **Vosk** small-en-us (~40MB) or small-de (~40MB) — for streaming and batch transcription (depends on selected language)
+- **faster-whisper** tiny int8 (~40MB) — alternative batch transcription engine (multilingual)
 - **Qwen2.5** 1.5B or 3B GGUF (~1-2GB) — for LLM summarization
 
 ## Usage
@@ -62,6 +63,7 @@ Models are downloaded automatically on first use:
 ## Configuration
 
 Edit preferences via Edit > Preferences (Ctrl+,):
+- Recognition language (English, German, or auto-detect in batch mode with faster-whisper)
 - Batch transcription engine (Vosk or faster-whisper)
 - Whisper model size and compute type
 - LLM model selection (3B or 1.5B)

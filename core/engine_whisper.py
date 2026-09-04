@@ -11,10 +11,17 @@ class WhisperEngine(QObject):
     transcription_error = Signal(str)
     model_loaded = Signal(str)
 
-    def __init__(self, model_size: str = "tiny", compute_type: str = "int8", parent=None):
+    def __init__(
+        self,
+        model_size: str = "tiny",
+        compute_type: str = "int8",
+        language: str | None = "en",
+        parent=None,
+    ):
         super().__init__(parent)
         self._model_size = model_size
         self._compute_type = compute_type
+        self._language = language
         self._model = None
         self._loaded = False
         self._audio_buffer: list[np.ndarray] = []
@@ -70,7 +77,7 @@ class WhisperEngine(QObject):
                 segments, info = self._model.transcribe(
                     audio_float32,
                     beam_size=5,
-                    language="en",
+                    language=self._language,
                     vad_filter=True,
                 )
 
@@ -99,7 +106,7 @@ class WhisperEngine(QObject):
                 segments, info = self._model.transcribe(
                     file_path,
                     beam_size=5,
-                    language="en",
+                    language=self._language,
                     vad_filter=True,
                 )
 

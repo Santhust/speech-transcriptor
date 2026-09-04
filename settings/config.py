@@ -4,9 +4,17 @@ from pathlib import Path
 from PySide6.QtCore import QSettings
 
 
+LANGUAGE_MODELS = {
+    "en": ("English", "vosk-model-small-en-us-0.15"),
+    "de": ("Deutsch (German)", "vosk-model-small-de-0.15"),
+    "auto": ("Auto-detect (Whisper batch only)", "vosk-model-small-en-us-0.15"),
+}
+
+
 _DEFAULTS = {
     "audio/device_index": -1,
     "audio/device_name": "",
+    "recognition/language": "en",
     "engine/streaming": "vosk",
     "engine/batch": "faster-whisper",
     "engine/summarizer": "qwen2.5-3b",

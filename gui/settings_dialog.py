@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.summarizer import Summarizer
-from settings.config import get_config
+from settings.config import LANGUAGE_MODELS, get_config
 
 
 class SettingsDialog(QDialog):
@@ -41,6 +41,14 @@ class SettingsDialog(QDialog):
         engine_group = QGroupBox("Transcription Engine")
         engine_form = QFormLayout()
 
+        self._language_combo = QComboBox()
+        for code, (display, _model) in LANGUAGE_MODELS.items():
+            self._language_combo.addItem(display, code)
+        self._language_combo.setToolTip(
+            "Recognition language. Auto-detect works in batch mode with "
+            "faster-whisper only; streaming always uses a fixed language."
+        )
+
         self._whisper_model_label = QLabel("Whisper model size:")
         self._whisper_compute_label = QLabel("Whisper compute type:")
 
@@ -56,6 +64,7 @@ class SettingsDialog(QDialog):
         engine_form.addRow(
             QLabel("Batch engine:"), QLabel("Vosk or faster-whisper (set via View menu)")
         )
+        engine_form.addRow("Language:", self._language_combo)
         engine_form.addRow(self._whisper_model_label, self._whisper_model_input)
         engine_form.addRow(self._whisper_compute_label, self._whisper_compute_input)
         engine_group.setLayout(engine_form)
@@ -113,6 +122,10 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self._llm_model_combo.setCurrentIndex(idx)
 
+        lang_idx = self._language_combo.findData(self._cfg.get_str("recognition/language"))
+        if lang_idx >= 0:
+            self._language_combo.setCurrentIndex(lang_idx)
+
         self._whisper_model_input.setValue(
             int(self._cfg.get("model/whisper_model") == "tiny")
         )
@@ -136,6 +149,7 @@ class SettingsDialog(QDialog):
         size = self._whisper_model_input.value()
 
         self._cfg.set("llm/model", self._llm_model_combo.currentData())
+        self._cfg.set("recognition/language", self._language_combo.currentData())
         self._cfg.set("model/whisper_model", whisper_sizes.get(size, "tiny"))
         self._cfg.set("model/whisper_compute", self._whisper_compute_input.text() or "int8")
         self._cfg.set("output/directory", self._output_dir_input.text())

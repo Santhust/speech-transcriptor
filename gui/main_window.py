@@ -23,6 +23,7 @@ from core.output_manager import OutputManager
 from core.summarizer import Summarizer
 from gui.audio_meter import AudioMeter
 from gui.search_bar import SearchBar, TranscriptHighlighter
+from settings.config import LANGUAGE_MODELS, get_config
 
 
 class MainWindow(QMainWindow):
@@ -33,12 +34,11 @@ class MainWindow(QMainWindow):
         self.resize(1000, 700)
 
         self._audio = AudioCapture()
-        self._vosk = VoskEngine()
-        self._whisper = WhisperEngine()
+        _cfg = get_config()
+        self._language = _cfg.get_str("recognition/language")
+        self._create_stt_engines()
         self._output = OutputManager()
 
-        from settings.config import get_config
-        _cfg = get_config()
         llm_model = _cfg.get_str("llm/model")
         self._summarizer = Summarizer(model_key=llm_model)
 
@@ -64,6 +64,34 @@ class MainWindow(QMainWindow):
         self._vosk.load_model()
         self._whisper.load_model()
         self._summarizer.load_model()
+
+    def _create_stt_engines(self):
+        lang = self._language
+        _, vosk_model = LANGUAGE_MODELS.get(lang, LANGUAGE_MODELS["en"])
+        whisper_lang = None if lang == "auto" else lang
+        self._vosk = VoskEngine(model_name=vosk_model)
+        self._whisper = WhisperEngine(language=whisper_lang)
+
+    def _rebuild_stt_engines(self):
+        if hasattr(self, "_vosk"):
+            self._vosk.cleanup()
+            self._vosk.deleteLater()
+        if hasattr(self, "_whisper"):
+            self._whisper.cleanup()
+            self._whisper.deleteLater()
+
+        self._vosk_loaded = False
+        self._whisper_loaded = False
+        self._create_stt_engines()
+        self._connect_engine_signals()
+        self._update_model_status()
+
+        display = LANGUAGE_MODELS.get(self._language, LANGUAGE_MODELS["en"])[0]
+        self.statusBar().showMessage(
+            f"Language changed to {display} — loading recognition models..."
+        )
+        self._vosk.load_model()
+        self._whisper.load_model()
 
     def _setup_ui(self):
         central = QWidget()
@@ -366,6 +394,16 @@ class MainWindow(QMainWindow):
         self._audio.set_audio_callback(self._on_audio_data)
         self._audio.set_level_callback(self._on_audio_level)
 
+        self._connect_engine_signals()
+
+        self._summarizer.model_loading.connect(
+            lambda: self.statusBar().showMessage("Loading summarization model...")
+        )
+        self._summarizer.model_loaded.connect(self._on_summarizer_loaded)
+        self._summarizer.summary_ready.connect(self._on_summary_ready)
+        self._summarizer.summary_error.connect(self._on_model_error)
+
+    def _connect_engine_signals(self):
         self._vosk.partial_result.connect(self._on_partial)
         self._vosk.final_result.connect(self._on_final)
         self._vosk.transcription_ready.connect(self._on_batch_result)
@@ -375,13 +413,6 @@ class MainWindow(QMainWindow):
         self._whisper.transcription_ready.connect(self._on_batch_result)
         self._whisper.transcription_error.connect(self._on_model_error)
         self._whisper.model_loaded.connect(self._on_whisper_loaded)
-
-        self._summarizer.model_loading.connect(
-            lambda: self.statusBar().showMessage("Loading summarization model...")
-        )
-        self._summarizer.model_loaded.connect(self._on_summarizer_loaded)
-        self._summarizer.summary_ready.connect(self._on_summary_ready)
-        self._summarizer.summary_error.connect(self._on_model_error)
 
     @Slot(str)
     def _on_vosk_loaded(self, name: str):
@@ -640,6 +671,11 @@ class MainWindow(QMainWindow):
             new_model = cfg.get_str("llm/model")
             if new_model != self._summarizer.current_model_key():
                 self._summarizer.switch_model(new_model)
+
+            new_lang = cfg.get_str("recognition/language")
+            if new_lang != self._language:
+                self._language = new_lang
+                self._rebuild_stt_engines()
 
     def _on_find(self):
         self._search_bar.toggle()
