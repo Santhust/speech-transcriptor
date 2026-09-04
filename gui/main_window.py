@@ -51,6 +51,11 @@ class MainWindow(QMainWindow):
         self._start_time = 0.0
         self._system_monitor = None
         self._mic_monitor = None
+        self._vosk_mic: VoskEngine | None = None
+        self._whisper_mic: WhisperEngine | None = None
+        self._dual_mode: str | None = None
+        self._partials: dict[str, str] = {}
+        self._dual_pending: dict[str, list[dict]] = {}
         self._vosk_loaded = False
         self._whisper_loaded = False
         self._summarizer_loaded = False
@@ -79,6 +84,34 @@ class MainWindow(QMainWindow):
         self._vosk = VoskEngine(model_name=vosk_model)
         self._whisper = WhisperEngine(language=whisper_lang)
 
+    def _make_mic_engine_pair(self):
+        _, vosk_model = LANGUAGE_MODELS.get(self._language, LANGUAGE_MODELS["en"])
+        whisper_lang = None if self._language == "auto" else self._language
+        self._vosk_mic = VoskEngine(model_name=vosk_model)
+        self._whisper_mic = WhisperEngine(language=whisper_lang)
+
+        self._vosk_mic.partial_result.connect(lambda t: self._set_partial("Mic", t))
+        self._vosk_mic.final_result.connect(
+            lambda text, ts: self._on_final(text, ts, speaker="Mic")
+        )
+        self._vosk_mic.transcription_ready.connect(
+            lambda segs: self._stash_dual_result("Mic", segs)
+        )
+        self._vosk_mic.model_error.connect(self._on_model_error)
+
+        self._whisper_mic.transcription_ready.connect(
+            lambda segs: self._stash_dual_result("Mic", segs)
+        )
+        self._whisper_mic.transcription_error.connect(self._on_model_error)
+
+    def _destroy_mic_engines(self):
+        for attr in ("_vosk_mic", "_whisper_mic"):
+            eng = getattr(self, attr, None)
+            if eng is not None:
+                eng.cleanup()
+                eng.deleteLater()
+                setattr(self, attr, None)
+
     def _rebuild_stt_engines(self):
         if hasattr(self, "_vosk"):
             self._vosk.cleanup()
@@ -86,6 +119,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_whisper"):
             self._whisper.cleanup()
             self._whisper.deleteLater()
+        self._destroy_mic_engines()
 
         self._vosk_loaded = False
         self._whisper_loaded = False
@@ -247,21 +281,28 @@ class MainWindow(QMainWindow):
 
         self._device_combo.blockSignals(True)
         self._device_combo.clear()
+        self._device_combo.addItem(
+            "\U0001f3a4+\U0001f50a Mic + System (separate speakers)", "__dual_sep__"
+        )
+        self._device_combo.addItem(
+            "\U0001f3a4+\U0001f50a Mic + System (merged)", "__dual_mix__"
+        )
         for dev in devices:
             icon = "\U0001f50a" if dev.is_monitor else "\U0001f3a4"
             self._device_combo.addItem(f"{icon} {dev.display_name}", dev.pulse_source_name)
 
         idx = self._device_combo.findData(saved_name)
-        if idx < 0:
+        if idx < 0 and saved_name not in ("__dual_sep__", "__dual_mix__"):
             default = self._audio.get_default_monitor()
             idx = (
                 self._device_combo.findData(default.pulse_source_name)
                 if default
-                else (0 if devices else -1)
+                else 2
             )
-        if idx >= 0:
-            self._device_combo.setCurrentIndex(idx)
-            cfg.set("audio/device_name", self._device_combo.itemData(idx))
+        if idx < 0:
+            idx = 0
+        self._device_combo.setCurrentIndex(idx)
+        cfg.set("audio/device_name", str(self._device_combo.itemData(idx)))
         self._device_combo.blockSignals(False)
 
     def _on_device_selected(self, index: int):
@@ -277,6 +318,22 @@ class MainWindow(QMainWindow):
             if dev.pulse_source_name == saved_name:
                 return dev
         return self._audio.get_default_monitor()
+
+    def _resolve_capture_plan(self):
+        """Returns (mode, mic_dev, sys_dev, single_dev).
+
+        mode: None for single-device recording, else "separate" or "merged".
+        """
+        saved_name = get_config().get_str("audio/device_name")
+        if saved_name in ("__dual_sep__", "__dual_mix__"):
+            mode = "separate" if saved_name == "__dual_sep__" else "merged"
+            sys_dev = self._audio.get_default_monitor()
+            mic_dev = next(
+                (d for d in self._audio.get_all_devices() if not d.is_monitor), None
+            )
+            if sys_dev is not None and mic_dev is not None:
+                return mode, mic_dev, sys_dev, None
+        return None, None, None, self._resolve_start_device()
 
     def _meter_source(self, kind: str):
         if kind == "system":
@@ -584,7 +641,7 @@ class MainWindow(QMainWindow):
         self._summarizer.summary_error.connect(self._on_model_error)
 
     def _connect_engine_signals(self):
-        self._vosk.partial_result.connect(self._on_partial)
+        self._vosk.partial_result.connect(lambda t: self._set_partial("System", t))
         self._vosk.final_result.connect(self._on_final)
         self._vosk.transcription_ready.connect(self._on_batch_result)
         self._vosk.model_loaded.connect(self._on_vosk_loaded)
@@ -631,7 +688,19 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage(f"Model error: {error}")
 
-    def _on_audio_data(self, audio_data, sample_rate: int):
+    def _on_audio_data(self, audio_data, sample_rate: int, source_idx: int = -1):
+        if source_idx == 1:
+            if self._is_streaming_mode:
+                if self._vosk_mic is not None:
+                    self._vosk_mic.feed_audio(audio_data, sample_rate)
+            elif self._batch_engine == "vosk":
+                if self._vosk_mic is not None:
+                    self._vosk_mic.feed_audio_buffered(audio_data, sample_rate)
+            else:
+                if self._whisper_mic is not None:
+                    self._whisper_mic.feed_audio(audio_data, sample_rate)
+            return
+
         if self._is_streaming_mode:
             self._vosk.feed_audio(audio_data, sample_rate)
         else:
@@ -640,35 +709,73 @@ class MainWindow(QMainWindow):
             else:
                 self._whisper.feed_audio(audio_data, sample_rate)
 
-    @Slot(str)
-    def _on_partial(self, text: str):
+    def _set_partial(self, speaker: str, text: str):
         now = time.time()
-        if self._is_streaming_mode and (now - self._last_partial_update) >= 0.15:
-            self._last_partial_update = now
+        if not self._is_streaming_mode or (now - self._last_partial_update) < 0.15:
+            return
+        self._last_partial_update = now
+
+        if self._dual_mode == "separate":
+            icon = "\U0001f3a4" if speaker == "Mic" else "\U0001f50a"
+            self._partials[speaker] = f"{icon} {text}"
+            other = "System" if speaker == "Mic" else "Mic"
+            self._partials.setdefault(other, "")
+            lines = [
+                self._partials[k]
+                for k in ("Mic", "System")
+                if self._partials.get(k)
+            ]
+            self._partial_label.setPlainText("\n".join(lines))
+        else:
             self._partial_label.setPlainText(text)
 
     @Slot(str, float)
-    def _on_final(self, text: str, timestamp: float):
-        self._partial_label.clear()
+    def _on_final(self, text: str, timestamp: float, speaker: str | None = None):
+        self._partials.pop(speaker or "System", None)
+        if self._dual_mode == "separate" and not any(self._partials.values()):
+            self._partials.clear()
+            self._partial_label.clear()
         elapsed = timestamp - self._start_time if self._start_time else 0
-        self._add_segment(text, elapsed)
+        self._add_segment(text, elapsed, speaker)
 
     @Slot(list)
     def _on_batch_result(self, segments: list[dict]):
+        if self._dual_mode == "separate":
+            self._stash_dual_result("System", segments)
+            return
+        self._render_batch(segments)
+
+    def _stash_dual_result(self, speaker: str, segments: list[dict]):
+        self._dual_pending[speaker] = list(segments)
+        if "System" in self._dual_pending and "Mic" in self._dual_pending:
+            merged = []
+            for spk, segs in self._dual_pending.items():
+                for seg in segs:
+                    merged.append({**seg, "speaker": spk})
+            merged.sort(key=lambda s: s.get("start", 0))
+            self._dual_pending.clear()
+            self._render_batch(merged)
+
+    def _render_batch(self, segments: list[dict]):
         self._partial_label.clear()
         self._transcript_segments.clear()
         self.transcript_view.clear()
 
         for seg in segments:
-            self._add_segment(seg["text"], seg.get("start", 0))
+            self._add_segment(seg["text"], seg.get("start", 0), seg.get("speaker"))
 
         engine = "Vosk" if self._batch_engine == "vosk" else "Whisper"
         self.statusBar().showMessage(
             f"Batch transcription complete — {len(segments)} segments ({engine})"
         )
 
-    def _add_segment(self, text: str, start_time: float):
-        self._transcript_segments.append({"text": text, "start": start_time})
+    def _add_segment(self, text: str, start_time: float, speaker: str | None = None):
+        if speaker:
+            text = f"[{speaker}] {text}"
+        entry = {"text": text, "start": start_time}
+        if speaker:
+            entry["speaker"] = speaker
+        self._transcript_segments.append(entry)
 
         if self.action_timestamps.isChecked():
             minutes = int(start_time // 60)
@@ -685,10 +792,33 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _on_start(self):
-        device = self._resolve_start_device()
-        if device is None:
+        mode, mic_dev, sys_dev, single_dev = self._resolve_capture_plan()
+        device = single_dev
+        if mode is None and device is None:
             self.statusBar().showMessage("No audio input device found!")
             return
+
+        if mode == "separate":
+            self._dual_mode = "separate"
+            if self._vosk_mic is None and self._whisper_mic is None:
+                self._make_mic_engine_pair()
+            mic_vosk_needed = (
+                self._is_streaming_mode or self._batch_engine == "vosk"
+            )
+            if mic_vosk_needed and not self._vosk_mic.is_loaded():
+                self._vosk_mic.load_model()
+                self.statusBar().showMessage(
+                    "Loading second Vosk model for microphone — press Record again in a moment..."
+                )
+                return
+            if not mic_vosk_needed and not self._whisper_mic.is_loaded():
+                self._whisper_mic.load_model()
+                self.statusBar().showMessage(
+                    "Loading second Whisper model for microphone — press Record again in a moment..."
+                )
+                return
+        else:
+            self._dual_mode = None
 
         if self._is_streaming_mode and not self._vosk.is_loaded():
             self.statusBar().showMessage("Vosk model still loading, please wait...")
@@ -701,14 +831,24 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Whisper model still loading, please wait...")
                 return
 
+        self._dual_pending.clear()
+        self._partials.clear()
         self._vosk.reset()
         self._vosk.clear_buffer()
         self._whisper.clear_buffer()
+        if self._vosk_mic is not None:
+            self._vosk_mic.reset()
+            self._vosk_mic.clear_buffer()
+        if self._whisper_mic is not None:
+            self._whisper_mic.clear_buffer()
         self._transcript_segments.clear()
         self._start_time = time.time()
 
-        self._audio.select_device(device)
-        self._audio.start(device)
+        if mode is not None:
+            self._audio.start_dual(mic_dev, sys_dev, mode)
+        else:
+            self._audio.select_device(device)
+            self._audio.start(device)
 
         self.action_start.setEnabled(False)
         self.action_stop.setEnabled(True)
@@ -716,37 +856,62 @@ class MainWindow(QMainWindow):
         self.action_pause.setText("&Pause")
 
         if self._is_streaming_mode:
-            mode = "Streaming (Vosk)"
+            engine_label = "Streaming (Vosk)"
         elif self._batch_engine == "vosk":
-            mode = "Batch (Vosk)"
+            engine_label = "Batch (Vosk)"
         else:
-            mode = "Batch (Whisper)"
-        self.statusBar().showMessage(f"Recording [{mode}]: {device.display_name}")
+            engine_label = "Batch (Whisper)"
+
+        if mode == "separate":
+            label = f"{engine_label} [Mic + System, separate]"
+        elif mode == "merged":
+            label = f"{engine_label} [Mic + System, merged]"
+        else:
+            label = f"{engine_label}: {device.display_name}"
+        self.statusBar().showMessage(f"Recording [{label}]")
 
     def _on_stop(self):
         self._audio.stop()
+
+        dual_sep = self._dual_mode == "separate"
 
         if self._is_streaming_mode:
             final_text = self._vosk.get_final()
             if final_text:
                 self._on_final(final_text, time.time())
+            if dual_sep and self._vosk_mic is not None:
+                mic_text = self._vosk_mic.get_final()
+                if mic_text:
+                    self._on_final(mic_text, time.time(), speaker="Mic")
             self.statusBar().showMessage(
                 f"Stopped — {len(self._transcript_segments)} segments transcribed"
             )
         else:
+            if dual_sep:
+                self.statusBar().showMessage(
+                    "Stopped — transcribing both sources (mic + system)..."
+                )
+            else:
+                self.statusBar().showMessage("Stopped — transcribing...")
+
             if self._batch_engine == "vosk":
                 duration = self._vosk.get_buffer_duration()
                 self.statusBar().showMessage(
                     f"Stopped — {duration:.1f}s captured, transcribing with Vosk..."
                 )
                 self._vosk.transcribe_batch()
+                if dual_sep and self._vosk_mic is not None:
+                    self._vosk_mic.transcribe_batch()
             else:
                 duration = self._whisper.get_buffer_duration()
                 self.statusBar().showMessage(
                     f"Stopped — {duration:.1f}s captured, transcribing with Whisper..."
                 )
                 self._whisper.transcribe()
+                if dual_sep and self._whisper_mic is not None:
+                    self._whisper_mic.transcribe()
 
+        self._dual_mode = None
         self.action_start.setEnabled(True)
         self.action_stop.setEnabled(False)
         self.action_pause.setEnabled(False)
@@ -793,6 +958,8 @@ class MainWindow(QMainWindow):
         self.transcript_view.clear()
         self._partial_label.clear()
         self._transcript_segments.clear()
+        self._partials.clear()
+        self._dual_pending.clear()
 
     def _on_summarize(self):
         text = self.transcript_view.toPlainText()
@@ -982,6 +1149,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._audio.stop()
         self._shutdown_meter_monitors()
+        self._destroy_mic_engines()
         self._vosk.cleanup()
         self._whisper.cleanup()
         self._summarizer.cleanup()

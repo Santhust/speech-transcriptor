@@ -6,6 +6,7 @@ A Python desktop application that captures system audio on Linux and transcribes
 
 - **System audio capture** — records any audio playing on your computer (browser tabs, music, meetings) via PipeWire/PulseAudio monitor sources
 - **Microphone capture** — record from any microphone via the input-device dropdown in the toolbar
+- **Conversation mode (dual capture)** — record mic and system audio simultaneously; transcripts either merged into one stream or separated per speaker (`[Mic]`/`[System]` labels)
 - **Streaming transcription** — real-time partial and final transcription using Vosk
 - **Batch transcription** — record first, transcribe after using either Vosk or faster-whisper
 - **Multi-language** — English and German recognition, plus Whisper auto-detect in batch mode
@@ -41,7 +42,10 @@ Models are downloaded automatically on first use, with live progress shown in th
 ## Usage
 
 1. Launch the app: `python main.py`
-2. Pick an input device in the toolbar: a 🔊 monitor source captures system audio, a 🎤 microphone captures your voice (choice is remembered)
+2. Pick an input in the toolbar:
+   - `🎤+🔊 Mic + System (separate speakers)` — dual capture, per-speaker labels; best with headphones (avoids cross-talk)
+   - `🎤+🔊 Mic + System (merged)` — dual capture mixed into one stream; more robust when there is speaker bleed/echo
+   - `🔊 monitor` sources capture system audio, `🎤` microphones capture your voice (choice is remembered)
 3. Press **Ctrl+R** or the toolbar Record button to start
 4. Watch transcription appear in real-time (streaming mode) or press **Ctrl+S** to stop and transcribe (batch mode)
 5. Use **Ctrl+U** or toolbar Summarize to generate an LLM summary
