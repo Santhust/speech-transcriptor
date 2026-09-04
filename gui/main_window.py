@@ -222,7 +222,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         icon_label = QLabel()
-        icon_label.setPixmap(self._make_device_icon(kind, size=18).pixmap(18, 18))
+        icon_label.setPixmap(self._source_icon(kind).pixmap(18, 18))
         icon_label.setFixedWidth(20)
         label = QLabel(label_text)
         label.setFixedWidth(64)
@@ -347,17 +347,43 @@ class MainWindow(QMainWindow):
         self._toolbar.addAction(self.action_find)
         self._toolbar.addAction(self.action_clear)
 
+    @staticmethod
+    def _themed_icon(name: str, fallback: QIcon) -> QIcon:
+        icon = QIcon.fromTheme(name)
+        return icon if not icon.isNull() else fallback
+
+    def _source_icon(self, kind: str) -> QIcon:
+        if kind == "mic":
+            return self._themed_icon(
+                "audio-input-microphone", self._make_device_icon("mic")
+            )
+        if kind == "speaker":
+            return self._themed_icon(
+                "audio-volume-high", self._make_device_icon("speaker")
+            )
+        return self._make_device_icon("mix")
+
     def _apply_action_icons(self):
-        self.action_start.setIcon(self._make_icon("▶"))
-        self.action_pause.setIcon(self._make_icon("⏸"))
-        self.action_stop.setIcon(self._make_icon("⏹"))
+        self.action_start.setIcon(
+            self._themed_icon("media-playback-start", self._make_icon("▶"))
+        )
+        self.action_pause.setIcon(
+            self._themed_icon("media-playback-pause", self._make_icon("⏸"))
+        )
+        self.action_stop.setIcon(
+            self._themed_icon("media-playback-stop", self._make_icon("⏹"))
+        )
         self.action_streaming.setIcon(self._make_icon("📡"))
         self.action_batch.setIcon(self._make_icon("📄"))
-        self.action_export.setIcon(self._make_icon("💾"))
-        self.action_copy.setIcon(self._make_icon("📋"))
+        self.action_export.setIcon(
+            self._themed_icon("document-save", self._make_icon("💾"))
+        )
+        self.action_copy.setIcon(self._themed_icon("edit-copy", self._make_icon("📋")))
         self.action_summarize.setIcon(self._make_icon("💡"))
-        self.action_find.setIcon(self._make_icon("🔍"))
-        self.action_clear.setIcon(self._make_icon("\U0001f9f9"))
+        self.action_find.setIcon(self._themed_icon("edit-find", self._make_icon("🔍")))
+        self.action_clear.setIcon(
+            self._themed_icon("edit-clear", self._make_icon("\U0001f9f9"))
+        )
         self._refresh_device_combo_icons()
 
     def _refresh_device_combo(self):
@@ -395,14 +421,14 @@ class MainWindow(QMainWindow):
         combo = getattr(self, "_device_combo", None)
         if combo is None or combo.count() == 0:
             return
-        combo.setItemIcon(0, self._make_device_icon("mic"))
+        combo.setItemIcon(0, self._source_icon("mic"))
         combo.setItemIcon(1, self._make_device_icon("mix"))
         for i in range(2, combo.count()):
             source = combo.itemData(i)
             kind = (
                 "speaker" if (source and str(source).endswith(".monitor")) else "mic"
             )
-            combo.setItemIcon(i, self._make_device_icon(kind))
+            combo.setItemIcon(i, self._source_icon(kind))
 
     def _on_device_selected(self, index: int):
         if index < 0:
@@ -1138,7 +1164,23 @@ class MainWindow(QMainWindow):
         self._applied_theme = theme
         self._apply_action_icons()
         for row in (self._system_meter_row, self._mic_meter_row):
-            row[2].setPixmap(self._make_device_icon(row[3], size=18).pixmap(18, 18))
+            row[2].setPixmap(self._source_icon(row[3]).pixmap(18, 18))
+            self._repolish(row[2])
+            self._repolish(row[1])
+        for widget in (self._partial_header, self._partial_label):
+            self._repolish(widget)
+            viewport = getattr(widget, "viewport", None)
+            if callable(viewport):
+                self._repolish(viewport())
+
+    @staticmethod
+    def _repolish(widget):
+        if widget is None:
+            return
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
 
     def _on_find(self):
         self._search_bar.toggle()
