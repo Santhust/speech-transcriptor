@@ -4,11 +4,13 @@ from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QProgressBar,
     QSplitter,
     QTextEdit,
     QToolBar,
@@ -172,6 +174,14 @@ class MainWindow(QMainWindow):
         self._toolbar.setIconSize(self._toolbar.iconSize())
         self.addToolBar(self._toolbar)
 
+        self._device_combo = QComboBox()
+        self._device_combo.setToolTip("Input device: system-audio monitor or microphone")
+        self._device_combo.currentIndexChanged.connect(self._on_device_selected)
+        self._refresh_device_combo()
+        self._toolbar.addWidget(self._device_combo)
+
+        self._toolbar.addSeparator()
+
         self.action_start.setIcon(self._make_icon("▶"))
         self._toolbar.addAction(self.action_start)
 
@@ -204,6 +214,44 @@ class MainWindow(QMainWindow):
 
         self.action_find.setIcon(self._make_icon("🔍"))
         self._toolbar.addAction(self.action_find)
+
+    def _refresh_device_combo(self):
+        cfg = get_config()
+        saved_name = cfg.get_str("audio/device_name")
+        devices = self._audio.get_all_devices()
+
+        self._device_combo.blockSignals(True)
+        self._device_combo.clear()
+        for dev in devices:
+            icon = "\U0001f50a" if dev.is_monitor else "\U0001f3a4"
+            self._device_combo.addItem(f"{icon} {dev.display_name}", dev.pulse_source_name)
+
+        idx = self._device_combo.findData(saved_name)
+        if idx < 0:
+            default = self._audio.get_default_monitor()
+            idx = (
+                self._device_combo.findData(default.pulse_source_name)
+                if default
+                else (0 if devices else -1)
+            )
+        if idx >= 0:
+            self._device_combo.setCurrentIndex(idx)
+            cfg.set("audio/device_name", self._device_combo.itemData(idx))
+        self._device_combo.blockSignals(False)
+
+    def _on_device_selected(self, index: int):
+        if index < 0:
+            return
+        source = self._device_combo.itemData(index)
+        if source:
+            get_config().set("audio/device_name", str(source))
+
+    def _resolve_start_device(self):
+        saved_name = get_config().get_str("audio/device_name")
+        for dev in self._audio.get_all_devices():
+            if dev.pulse_source_name == saved_name:
+                return dev
+        return self._audio.get_default_monitor()
 
     def _setup_menus(self):
         menubar = self.menuBar()
@@ -363,7 +411,45 @@ class MainWindow(QMainWindow):
     def _setup_statusbar(self):
         self._status_model_label = QLabel("")
         self.statusBar().addPermanentWidget(self._status_model_label)
+
+        self._download_label = QLabel("")
+        self._download_label.setVisible(False)
+        self._download_bar = QProgressBar()
+        self._download_bar.setFixedWidth(180)
+        self._download_bar.setVisible(False)
+        self.statusBar().addPermanentWidget(self._download_label)
+        self.statusBar().addPermanentWidget(self._download_bar)
+
+        self._last_download_emit = 0.0
         self.statusBar().showMessage("Initializing models...")
+
+    def _on_download_progress(self, done: int, total: int):
+        if total <= 0:
+            self._hide_download_progress()
+            return
+
+        now = time.time()
+        if done < total and (now - self._last_download_emit) < 0.1:
+            return
+        self._last_download_emit = now
+
+        pct = min(int(done * 100 / total), 100)
+        name = "model"
+        if isinstance(self.sender(), VoskEngine):
+            name = self.sender()._model_name
+        elif isinstance(self.sender(), WhisperEngine):
+            name = f"faster-whisper-{self.sender()._model_size}"
+        self._download_label.setText(f"Downloading {name}:")
+        self._download_bar.setValue(pct)
+        mb_done = done / (1024 * 1024)
+        mb_total = total / (1024 * 1024)
+        self._download_bar.setFormat(f"{pct}% ({mb_done:.0f}/{mb_total:.0f} MB)")
+        self._download_label.setVisible(True)
+        self._download_bar.setVisible(True)
+
+    def _hide_download_progress(self):
+        self._download_label.setVisible(False)
+        self._download_bar.setVisible(False)
 
     def _update_model_status(self):
         parts = []
@@ -409,10 +495,12 @@ class MainWindow(QMainWindow):
         self._vosk.transcription_ready.connect(self._on_batch_result)
         self._vosk.model_loaded.connect(self._on_vosk_loaded)
         self._vosk.model_error.connect(self._on_model_error)
+        self._vosk.download_progress.connect(self._on_download_progress)
 
         self._whisper.transcription_ready.connect(self._on_batch_result)
         self._whisper.transcription_error.connect(self._on_model_error)
         self._whisper.model_loaded.connect(self._on_whisper_loaded)
+        self._whisper.download_progress.connect(self._on_download_progress)
 
     @Slot(str)
     def _on_vosk_loaded(self, name: str):
@@ -425,7 +513,6 @@ class MainWindow(QMainWindow):
         self._whisper_loaded = True
         self._update_model_status()
         self._check_all_loaded()
-
     def _check_all_loaded(self):
         if self._vosk_loaded and self._whisper_loaded and self._summarizer_loaded:
             self.statusBar().showMessage("All models ready — press Ctrl+R to record")
@@ -441,6 +528,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_model_error(self, error: str):
+        self._hide_download_progress()
         if self._summarize_timer and self._summarize_timer.isActive():
             elapsed = time.time() - self._summarize_start_time
             self._summarize_timer.stop()
@@ -506,9 +594,9 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _on_start(self):
-        default = self._audio.get_default_monitor()
-        if default is None:
-            self.statusBar().showMessage("No audio monitor device found!")
+        device = self._resolve_start_device()
+        if device is None:
+            self.statusBar().showMessage("No audio input device found!")
             return
 
         if self._is_streaming_mode and not self._vosk.is_loaded():
@@ -528,8 +616,8 @@ class MainWindow(QMainWindow):
         self._transcript_segments.clear()
         self._start_time = time.time()
 
-        self._audio.select_device(default)
-        self._audio.start(default)
+        self._audio.select_device(device)
+        self._audio.start(device)
 
         self.action_start.setEnabled(False)
         self.action_stop.setEnabled(True)
@@ -542,7 +630,7 @@ class MainWindow(QMainWindow):
             mode = "Batch (Vosk)"
         else:
             mode = "Batch (Whisper)"
-        self.statusBar().showMessage(f"Recording [{mode}]: {default.display_name}")
+        self.statusBar().showMessage(f"Recording [{mode}]: {device.display_name}")
 
     def _on_stop(self):
         self._audio.stop()

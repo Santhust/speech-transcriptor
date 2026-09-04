@@ -70,6 +70,11 @@ class AudioCapture:
             self.discover_devices()
         return self._monitor_devices
 
+    def get_all_devices(self) -> list[AudioDevice]:
+        if not self._all_devices:
+            self.discover_devices()
+        return list(self._all_devices)
+
     def get_default_monitor(self) -> AudioDevice | None:
         monitors = self.get_monitor_devices()
         if not monitors:

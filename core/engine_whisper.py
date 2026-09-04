@@ -10,6 +10,7 @@ class WhisperEngine(QObject):
     transcription_ready = Signal(list)
     transcription_error = Signal(str)
     model_loaded = Signal(str)
+    download_progress = Signal(int, int)
 
     def __init__(
         self,
@@ -33,6 +34,20 @@ class WhisperEngine(QObject):
 
         def _load():
             try:
+                from core.model_downloader import ensure_whisper_model
+
+                try:
+                    ensure_whisper_model(
+                        self._model_size,
+                        progress_cb=lambda done, total: self.download_progress.emit(
+                            done, total
+                        ),
+                    )
+                except Exception as e:
+                    self.transcription_error.emit(f"Model download failed: {e}")
+                    return
+                self.download_progress.emit(0, 0)
+
                 from faster_whisper import WhisperModel
                 self._model = WhisperModel(
                     self._model_size,

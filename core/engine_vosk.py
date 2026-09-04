@@ -16,6 +16,7 @@ class VoskEngine(QObject):
     transcription_ready = Signal(list)
     model_loaded = Signal(str)
     model_error = Signal(str)
+    download_progress = Signal(int, int)
 
     def __init__(self, model_name: str = "vosk-model-small-en-us-0.15", parent=None):
         super().__init__(parent)
@@ -34,6 +35,19 @@ class VoskEngine(QObject):
         def _load():
             try:
                 _MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                from core.model_downloader import ensure_vosk_model
+
+                try:
+                    ensure_vosk_model(
+                        self._model_name,
+                        progress_cb=lambda done, total: self.download_progress.emit(
+                            done, total
+                        ),
+                    )
+                except Exception as e:
+                    self.model_error.emit(f"Model download failed: {e}")
+                    return
+                self.download_progress.emit(0, 0)
                 self._model = vosk.Model(model_name=self._model_name)
                 self._recognizer = vosk.KaldiRecognizer(self._model, self._sample_rate)
                 self._recognizer.SetWords(True)
