@@ -26,8 +26,8 @@ A Python desktop application that captures system audio on Linux and transcribes
 ## Setup
 
 ```bash
-git clone <repo-url>
-cd speechTranscriptor
+git clone https://github.com/Santhust/speech-transcriptor.git
+cd speech-transcriptor
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -78,4 +78,5 @@ Edit preferences via Edit > Preferences (Ctrl+,):
 
 ## License
 
-This project uses PySide6 (LGPL). See individual dependency licenses for details.
+Licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE).
+Uses PySide6 (LGPL).

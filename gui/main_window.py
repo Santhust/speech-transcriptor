@@ -1302,7 +1302,8 @@ class MainWindow(QMainWindow):
             "<li>Export to .txt and .srt</li>"
             "<li>Search and keyword highlighting</li>"
             "</ul>"
-            "<p>Press Ctrl+R to start recording.</p>",
+            "<p>Press Ctrl+R to start recording.</p>"
+            "<p>Licensed under GPL-3.0 — see LICENSE.</p>",
         )
 
     def closeEvent(self, event):
