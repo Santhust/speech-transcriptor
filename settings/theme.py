@@ -11,11 +11,11 @@ THEME_OPTIONS = {
     "dark": "Dark",
 }
 
-_original_icon_theme: str | None = None
+_icon_pair: tuple[str, str] | None = None  # (light_theme, dark_theme)
 
 
 def apply_theme(theme: str):
-    global _original_icon_theme
+    global _icon_pair
     app = QApplication.instance()
     if app is None:
         return
@@ -23,8 +23,8 @@ def apply_theme(theme: str):
     from PySide6.QtGui import QIcon
 
     _ensure_search_paths()
-    if _original_icon_theme is None:
-        _original_icon_theme = QIcon.themeName() or _detect_fallback_theme()
+    if _icon_pair is None:
+        _icon_pair = _resolve_icon_pair()
 
     if theme == "dark":
         app.setStyle("Fusion")
@@ -72,23 +72,51 @@ def _detect_fallback_theme() -> str:
     return ""
 
 
+def _is_dark_theme_name(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.endswith("-dark") or lowered.endswith("_dark") or "dark" in lowered
+
+
+def _light_counterpart(name: str) -> str:
+    for suffix in ("-dark", "_dark"):
+        if name.lower().endswith(suffix):
+            stripped = name[: -len(suffix)]
+            if _theme_installed(stripped):
+                return stripped
+    for candidate in ("breeze", "Adwaita", "Tango", "PiXtrix", "oxygen"):
+        if _theme_installed(candidate) and not _is_dark_theme_name(candidate):
+            return candidate
+    return name
+
+
+def _dark_counterpart(name: str) -> str:
+    if _is_dark_theme_name(name):
+        return name
+    for candidate in (f"{name}-dark", f"{name}_dark"):
+        if _theme_installed(candidate):
+            return candidate
+    return name
+
+
+def _resolve_icon_pair() -> tuple[str, str]:
+    from PySide6.QtGui import QIcon
+
+    base = QIcon.themeName() or _detect_fallback_theme()
+    light = _light_counterpart(base) if base else _detect_fallback_theme()
+    dark = _dark_counterpart(base if base else light)
+    return light, dark
+
+
 def _sync_icon_theme(theme: str):
-    base = _original_icon_theme or ""
+    if _icon_pair is None:
+        return
+    light, dark = _icon_pair
 
     target: str | None = None
     if theme == "dark":
-        for candidate in (f"{base}-dark", f"{base}_dark", "breeze-dark", "Adwaita-dark"):
-            if _theme_installed(candidate):
-                target = candidate
-                break
-        if target is None:
-            target = base if _theme_installed(base) else None
+        target = dark if _theme_installed(dark) else None
     else:
-        if base and _theme_installed(base):
-            target = base
-        else:
-            detected = _detect_fallback_theme()
-            target = detected or None
+        target = light if _theme_installed(light) else None
 
     if target:
         QIcon.setThemeName(target)
